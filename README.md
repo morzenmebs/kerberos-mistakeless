@@ -1,67 +1,55 @@
-# Kerberos Mistakeless
+# Kerberos Client Library (Pure Java)
 
-This repository provides a minimal, repeatable setup for a local MIT Kerberos realm.
-It includes configuration templates and a small set of scripts to initialize a KDC
-and validate a client login.
+This project provides a **pure Java Kerberos client** built on [Apache Kerby](https://directory.apache.org/kerby/).
+It is designed to authenticate machines or users against a Kerberos KDC without relying on
+native OS Kerberos libraries, making it portable across Windows, Linux, and macOS.
 
-## Prerequisites
+## Why Apache Kerby?
 
-The commands below assume a Debian/Ubuntu host with systemd.
+Apache Kerby is a Java-only Kerberos implementation that does not depend on system
+`krb5` libraries. This library wraps Kerby client APIs to provide a small, explicit
+Java API for Kerberos authentication.
 
-```bash
-sudo apt-get update
-sudo apt-get install -y krb5-kdc krb5-admin-server krb5-user
+## Usage
+
+```java
+import com.mistakeless.kerberos.auth.KerberosAuthenticator;
+import com.mistakeless.kerberos.auth.KerberosLoginResult;
+import com.mistakeless.kerberos.config.KerberosClientConfig;
+import java.io.File;
+
+KerberosClientConfig config = KerberosClientConfig.builder()
+    .realm("EXAMPLE.COM")
+    .kdcAddress("kdc.example.com", 88)
+    .build();
+
+KerberosAuthenticator authenticator = new KerberosAuthenticator(config);
+KerberosLoginResult result = authenticator.authenticateWithPassword(
+    "user@EXAMPLE.COM",
+    "correct-horse-battery-staple"
+);
+
+System.out.println("Authenticated principal: " + result.getClientPrincipal());
 ```
 
-## Quickstart (single host KDC + client)
+For keytab authentication:
 
-1. **Set your realm details** (replace values as needed):
+```java
+KerberosLoginResult result = authenticator.authenticateWithKeytab(
+    "service/host@EXAMPLE.COM",
+    new File("/path/to/service.keytab")
+);
+```
 
-   ```bash
-   export KRB_REALM=EXAMPLE.COM
-   export KRB_DOMAIN=example.com
-   export KRB_KDC_HOST=kerberos.example.com
-   export KRB_ADMIN_HOST=kerberos.example.com
-   ```
+## Build
 
-2. **Install the configuration templates**:
-
-   ```bash
-   sudo ./scripts/install-configs.sh
-   ```
-
-3. **Initialize the KDC database and admin principal**:
-
-   ```bash
-   sudo ./scripts/init-kdc.sh
-   ```
-
-4. **Start the KDC services**:
-
-   ```bash
-   sudo systemctl restart krb5-kdc krb5-admin-server
-   ```
-
-5. **Verify the realm**:
-
-   ```bash
-   kinit admin/admin
-   klist
-   ```
+```bash
+mvn -DskipTests package
+```
 
 ## Notes
 
-- The scripts do not overwrite existing databases unless you explicitly remove them.
-- If you are setting up multiple hosts, update `KRB_KDC_HOST` and
-  `KRB_ADMIN_HOST` to point to the KDC machine and deploy only `krb5.conf`
-  on clients.
-- For production, replace the example realm, hostnames, and ACLs with your
-  environment-specific values.
-
-## Files
-
-- `config/krb5.conf`: Client + server realm configuration.
-- `config/kdc.conf`: KDC configuration for the realm.
-- `config/kadm5.acl`: Admin ACLs for `kadmind`.
-- `scripts/install-configs.sh`: Installs configs to `/etc` locations.
-- `scripts/init-kdc.sh`: Initializes the KDC database and admin principal.
+- This library only performs Kerberos client authentication; it does not manage KDC setup.
+- You must point the client at your KDC host and realm explicitly through the config builder.
+- To use with an LDAP or other Kerberos-aware service, use the returned TGT to request
+  service tickets with Kerby APIs.
