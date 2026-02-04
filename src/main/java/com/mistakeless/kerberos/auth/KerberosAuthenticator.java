@@ -2,13 +2,26 @@ package com.mistakeless.kerberos.auth;
 
 import com.mistakeless.kerberos.config.KerberosClientConfig;
 import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
-import org.apache.kerby.kerberos.kerb.KrbException;
-import org.apache.kerby.kerberos.kerb.client.KrbClient;
-import org.apache.kerby.kerberos.kerb.client.KrbConfig;
-import org.apache.kerby.kerberos.kerb.client.KrbConfigKey;
-import org.apache.kerby.kerberos.kerb.type.ticket.TgtTicket;
+import java.util.Optional;
+import javax.security.auth.Subject;
+import javax.security.auth.callback.Callback;
+import javax.security.auth.callback.CallbackHandler;
+import javax.security.auth.callback.NameCallback;
+import javax.security.auth.callback.PasswordCallback;
+import javax.security.auth.callback.UnsupportedCallbackException;
+import javax.security.auth.kerberos.KerberosTicket;
+import javax.security.auth.login.AppConfigurationEntry;
+import javax.security.auth.login.Configuration;
+import javax.security.auth.login.LoginContext;
+import javax.security.auth.login.LoginException;
 
 public final class KerberosAuthenticator {
     private final KerberosClientConfig clientConfig;
@@ -17,32 +30,116 @@ public final class KerberosAuthenticator {
         this.clientConfig = Objects.requireNonNull(clientConfig, "clientConfig");
     }
 
-    public KerberosLoginResult authenticateWithPassword(String principal, String password) throws KrbException {
+    public KerberosLoginResult authenticateWithPassword(String principal, String password)
+        throws LoginException, IOException {
         Objects.requireNonNull(principal, "principal");
         Objects.requireNonNull(password, "password");
-        KrbClient krbClient = buildClient();
-        TgtTicket tgt = krbClient.requestTgt(principal, password);
-        return new KerberosLoginResult(principal, tgt, Instant.now());
+        Path krb5Conf = writeKrb5Conf();
+        System.setProperty("java.security.krb5.conf", krb5Conf.toString());
+
+        Configuration configuration = buildJaasConfig(principal, null, false);
+        CallbackHandler handler = callbacks -> handlePasswordCallbacks(callbacks, principal, password);
+        LoginContext loginContext = new LoginContext("Krb5Login", null, handler, configuration);
+        loginContext.login();
+
+        Subject subject = loginContext.getSubject();
+        KerberosTicket tgt = extractTgt(subject);
+        return new KerberosLoginResult(principal, tgt, subject, Instant.now());
     }
 
-    public KerberosLoginResult authenticateWithKeytab(String principal, File keytabFile) throws KrbException {
+    public KerberosLoginResult authenticateWithKeytab(String principal, File keytabFile)
+        throws LoginException, IOException {
         Objects.requireNonNull(principal, "principal");
         Objects.requireNonNull(keytabFile, "keytabFile");
-        KrbClient krbClient = buildClient();
-        TgtTicket tgt = krbClient.requestTgt(principal, keytabFile);
-        return new KerberosLoginResult(principal, tgt, Instant.now());
+        Path krb5Conf = writeKrb5Conf();
+        System.setProperty("java.security.krb5.conf", krb5Conf.toString());
+
+        Configuration configuration = buildJaasConfig(principal, keytabFile, true);
+        LoginContext loginContext = new LoginContext("Krb5Login", null, null, configuration);
+        loginContext.login();
+
+        Subject subject = loginContext.getSubject();
+        KerberosTicket tgt = extractTgt(subject);
+        return new KerberosLoginResult(principal, tgt, subject, Instant.now());
     }
 
-    private KrbClient buildClient() throws KrbException {
-        KrbConfig config = new KrbConfig();
-        config.setString(KrbConfigKey.DEFAULT_REALM, clientConfig.getRealm());
-        config.setString(KrbConfigKey.KDC_HOST, clientConfig.getKdcAddress().getHostString());
-        config.setInt(KrbConfigKey.KDC_PORT, clientConfig.getKdcAddress().getPort());
-        config.setBoolean(KrbConfigKey.KDC_ALLOW_TCP, clientConfig.isAllowTcp());
-        config.setBoolean(KrbConfigKey.KDC_ALLOW_UDP, true);
+    private KerberosTicket extractTgt(Subject subject) throws LoginException {
+        Optional<KerberosTicket> ticket = subject.getPrivateCredentials(KerberosTicket.class)
+            .stream()
+            .findFirst();
+        if (ticket.isEmpty()) {
+            throw new LoginException("Kerberos TGT not found in subject credentials.");
+        }
+        return ticket.get();
+    }
 
-        KrbClient krbClient = new KrbClient(config);
-        krbClient.init();
-        return krbClient;
+    private void handlePasswordCallbacks(Callback[] callbacks, String principal, String password)
+        throws UnsupportedCallbackException {
+        for (Callback callback : callbacks) {
+            if (callback instanceof NameCallback) {
+                ((NameCallback) callback).setName(principal);
+            } else if (callback instanceof PasswordCallback) {
+                ((PasswordCallback) callback).setPassword(password.toCharArray());
+            } else {
+                throw new UnsupportedCallbackException(callback, "Unsupported callback type.");
+            }
+        }
+    }
+
+    private Configuration buildJaasConfig(String principal, File keytabFile, boolean useKeytab) {
+        Map<String, String> options = new HashMap<>();
+        options.put("principal", principal);
+        options.put("refreshKrb5Config", "true");
+        options.put("doNotPrompt", Boolean.toString(useKeytab));
+        options.put("useTicketCache", "false");
+        options.put("isInitiator", "true");
+
+        if (useKeytab) {
+            options.put("useKeyTab", "true");
+            options.put("keyTab", keytabFile.getAbsolutePath());
+            options.put("storeKey", "true");
+        }
+
+        AppConfigurationEntry entry = new AppConfigurationEntry(
+            "com.sun.security.auth.module.Krb5LoginModule",
+            AppConfigurationEntry.LoginModuleControlFlag.REQUIRED,
+            options
+        );
+
+        return new Configuration() {
+            @Override
+            public AppConfigurationEntry[] getAppConfigurationEntry(String name) {
+                return new AppConfigurationEntry[] { entry };
+            }
+        };
+    }
+
+    private Path writeKrb5Conf() throws IOException {
+        StringBuilder config = new StringBuilder();
+        config.append("[libdefaults]\n");
+        config.append("  default_realm = ").append(clientConfig.getRealm()).append('\n');
+        config.append("  dns_lookup_kdc = false\n");
+        config.append("  dns_lookup_realm = false\n");
+        if (!clientConfig.isAllowTcp()) {
+            config.append("  udp_preference_limit = 2147483647\n");
+        }
+        config.append("\n[realms]\n");
+        config.append("  ").append(clientConfig.getRealm()).append(" = {\n");
+        config.append("    kdc = ").append(clientConfig.getKdcHost())
+            .append(':').append(clientConfig.getKdcPort()).append('\n');
+        config.append("  }\n");
+
+        if (clientConfig.getDomain() != null) {
+            config.append("\n[domain_realm]\n");
+            config.append("  .").append(clientConfig.getDomain()).append(" = ")
+                .append(clientConfig.getRealm()).append('\n');
+            config.append("  ").append(clientConfig.getDomain()).append(" = ")
+                .append(clientConfig.getRealm()).append('\n');
+        }
+
+        Path tempFile = Files.createTempFile("krb5-", ".conf");
+        Files.writeString(tempFile, config.toString(), StandardCharsets.UTF_8);
+        tempFile.toFile().deleteOnExit();
+        return tempFile;
     }
 }

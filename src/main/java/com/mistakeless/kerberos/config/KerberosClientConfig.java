@@ -1,16 +1,19 @@
 package com.mistakeless.kerberos.config;
 
-import java.net.InetSocketAddress;
 import java.util.Objects;
 
 public final class KerberosClientConfig {
     private final String realm;
-    private final InetSocketAddress kdcAddress;
+    private final String kdcHost;
+    private final int kdcPort;
+    private final String domain;
     private final boolean allowTcp;
 
     private KerberosClientConfig(Builder builder) {
         this.realm = builder.realm;
-        this.kdcAddress = builder.kdcAddress;
+        this.kdcHost = builder.kdcHost;
+        this.kdcPort = builder.kdcPort;
+        this.domain = builder.domain;
         this.allowTcp = builder.allowTcp;
     }
 
@@ -18,8 +21,16 @@ public final class KerberosClientConfig {
         return realm;
     }
 
-    public InetSocketAddress getKdcAddress() {
-        return kdcAddress;
+    public String getKdcHost() {
+        return kdcHost;
+    }
+
+    public int getKdcPort() {
+        return kdcPort;
+    }
+
+    public String getDomain() {
+        return domain;
     }
 
     public boolean isAllowTcp() {
@@ -32,7 +43,9 @@ public final class KerberosClientConfig {
 
     public static final class Builder {
         private String realm;
-        private InetSocketAddress kdcAddress;
+        private String kdcHost;
+        private int kdcPort = 88;
+        private String domain;
         private boolean allowTcp = true;
 
         private Builder() {
@@ -44,7 +57,13 @@ public final class KerberosClientConfig {
         }
 
         public Builder kdcAddress(String host, int port) {
-            this.kdcAddress = new InetSocketAddress(Objects.requireNonNull(host, "host"), port);
+            this.kdcHost = Objects.requireNonNull(host, "host");
+            this.kdcPort = port;
+            return this;
+        }
+
+        public Builder domain(String domain) {
+            this.domain = Objects.requireNonNull(domain, "domain");
             return this;
         }
 
@@ -55,7 +74,7 @@ public final class KerberosClientConfig {
 
         public KerberosClientConfig build() {
             Objects.requireNonNull(realm, "realm");
-            Objects.requireNonNull(kdcAddress, "kdcAddress");
+            Objects.requireNonNull(kdcHost, "kdcHost");
             return new KerberosClientConfig(this);
         }
     }

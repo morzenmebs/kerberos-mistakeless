@@ -1,14 +1,15 @@
 # Kerberos Client Library (Pure Java)
 
-This project provides a **pure Java Kerberos client** built on [Apache Kerby](https://directory.apache.org/kerby/).
-It is designed to authenticate machines or users against a Kerberos KDC without relying on
-native OS Kerberos libraries, making it portable across Windows, Linux, and macOS.
+This project provides a **pure Java Kerberos client** built on the JDK's JAAS
+`Krb5LoginModule`. It is designed to authenticate machines or users against a Kerberos
+KDC without relying on native OS Kerberos libraries, making it portable across Windows,
+Linux, and macOS.
 
-## Why Apache Kerby?
+## Why the JDK JAAS module?
 
-Apache Kerby is a Java-only Kerberos implementation that does not depend on system
-`krb5` libraries. This library wraps Kerby client APIs to provide a small, explicit
-Java API for Kerberos authentication.
+The JDK ships with a Java-only Kerberos implementation (`Krb5LoginModule`) that can
+authenticate without external native libraries. This library wraps that module with a
+small, explicit Java API for Kerberos authentication.
 
 ## Usage
 
@@ -21,6 +22,7 @@ import java.io.File;
 KerberosClientConfig config = KerberosClientConfig.builder()
     .realm("EXAMPLE.COM")
     .kdcAddress("kdc.example.com", 88)
+    .domain("example.com")
     .build();
 
 KerberosAuthenticator authenticator = new KerberosAuthenticator(config);
@@ -51,5 +53,5 @@ mvn -DskipTests package
 
 - This library only performs Kerberos client authentication; it does not manage KDC setup.
 - You must point the client at your KDC host and realm explicitly through the config builder.
-- To use with an LDAP or other Kerberos-aware service, use the returned TGT to request
-  service tickets with Kerby APIs.
+- The authenticator generates a temporary `krb5.conf` with your realm and KDC settings
+  and instructs the JDK to use it for the login session.
